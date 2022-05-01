@@ -72,6 +72,10 @@ func (ec etcdClient) Get() *clientv3.Client {
 
 var EtcdClient = etcdClient{}
 
+func (ec *etcdClient) NewClient() etcdClient {
+	return etcdClient{}
+}
+
 func (ec *etcdClient) Init(endPoints []string, username, password string, dialTimeoutSec int) error {
 
 	var dialTimeout time.Duration
