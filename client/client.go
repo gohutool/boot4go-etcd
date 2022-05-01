@@ -25,7 +25,7 @@ import (
 * 修改历史 : 1. [2022/5/1 10:46] 创建文件 by LongYong
 */
 
-var Logger = log4go.LoggerManager.GetLogger("gohutool.etcd4go.client")
+var logger = log4go.LoggerManager.GetLogger("gohutool.etcd4go.client")
 
 const (
 	DEFAULT_DIAL_TIMEOUT  = 3 * time.Second
@@ -459,7 +459,7 @@ func (ec *etcdClient) WatchKey(key string, listener WatchChannelEventListener, o
 				go func() {
 					defer func() {
 						if err := recover(); err != nil {
-							Logger.Warning("Watch Event raise error %v", err)
+							logger.Warning("Watch Event raise error %v", err)
 						}
 					}()
 					listener(ev)
@@ -482,7 +482,7 @@ func (ec *etcdClient) WatchKeyWithPrefix(prefix string, listener WatchChannelEve
 				go func() {
 					defer func() {
 						if err := recover(); err != nil {
-							Logger.Warning("Watch Event raise error %v", err)
+							logger.Warning("Watch Event raise error %v", err)
 						}
 					}()
 					listener(ev)

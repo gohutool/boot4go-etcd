@@ -33,7 +33,7 @@ func TestDB(t *testing.T) {
 	}
 
 	go EtcdClient.WatchKeyWithPrefix("/gateway4go/database/cert-data/", func(event *clientv3.Event) {
-		Logger.Info("Event : %+v IsCreate %+v IsModify %+v %+v %+v ",
+		logger.Info("Event : %+v IsCreate %+v IsModify %+v %+v %+v ",
 			event.Type, event.IsCreate(), event.IsModify(), event.Kv, event.PrevKv)
 	}, clientv3.WithPrevKV())
 
