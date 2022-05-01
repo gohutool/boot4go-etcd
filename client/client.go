@@ -1,4 +1,4 @@
-package boot4go_etcd
+package client
 
 import (
 	"encoding/json"
@@ -6,6 +6,7 @@ import (
 	"github.com/coreos/etcd/clientv3"
 	fastjson "github.com/gohutool/boot4go-fastjson"
 	"github.com/gohutool/boot4go-util"
+	"github.com/gohutool/log4go"
 	"golang.org/x/net/context"
 	"reflect"
 	"strconv"
@@ -23,6 +24,8 @@ import (
 * 创建日期 : 2022/5/1 10:46
 * 修改历史 : 1. [2022/5/1 10:46] 创建文件 by LongYong
 */
+
+var Logger = log4go.LoggerManager.GetLogger("gohutool.etcd4go.client")
 
 const (
 	DEFAULT_DIAL_TIMEOUT  = 3 * time.Second
@@ -99,7 +102,7 @@ func (ec *etcdClient) Init(endPoints []string, username, password string, dialTi
 	return nil
 }
 
-func (ec *etcdClient) KeyValue(key string, readTimeoutSec int) (string, error) {
+func (ec *etcdClient) KeyValue(key string, readTimeoutSec int, opts ...clientv3.OpOption) (string, error) {
 
 	var readTimeout time.Duration
 
@@ -110,7 +113,7 @@ func (ec *etcdClient) KeyValue(key string, readTimeoutSec int) (string, error) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
-	rsp, err := ec.impl.Get(ctx, key)
+	rsp, err := ec.impl.Get(ctx, key, opts...)
 	defer cancel()
 	if err == nil {
 		if len(rsp.Kvs) == 0 {
@@ -123,8 +126,8 @@ func (ec *etcdClient) KeyValue(key string, readTimeoutSec int) (string, error) {
 	}
 }
 
-func (ec *etcdClient) KeyObject(key string, t reflect.Type, readTimeoutSec int) any {
-	str, err := ec.KeyValue(key, readTimeoutSec)
+func (ec *etcdClient) KeyObject(key string, t reflect.Type, readTimeoutSec int, opts ...clientv3.OpOption) any {
+	str, err := ec.KeyValue(key, readTimeoutSec, opts...)
 	if err != nil {
 		return nil
 	}
@@ -143,8 +146,8 @@ func (ec *etcdClient) KeyObject(key string, t reflect.Type, readTimeoutSec int) 
 
 }
 
-func (ec *etcdClient) KeyMapObject(key string, readTimeoutSec int) (map[string]any, error) {
-	str, err := ec.KeyValue(key, readTimeoutSec)
+func (ec *etcdClient) KeyMapObject(key string, readTimeoutSec int, opts ...clientv3.OpOption) (map[string]any, error) {
+	str, err := ec.KeyValue(key, readTimeoutSec, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +161,7 @@ func (ec *etcdClient) KeyMapObject(key string, readTimeoutSec int) (map[string]a
 	return rtn, nil
 }
 
-func (ec *etcdClient) CountWithPrefix(prefix string, readTimeoutSec int) int {
+func (ec *etcdClient) CountWithPrefix(prefix string, readTimeoutSec int, opts ...clientv3.OpOption) int {
 	var readTimeout time.Duration
 
 	if int(readTimeoutSec) <= 0 {
@@ -167,8 +170,12 @@ func (ec *etcdClient) CountWithPrefix(prefix string, readTimeoutSec int) int {
 		readTimeout = time.Duration(readTimeoutSec) * time.Second
 	}
 
+	opts1 := make([]clientv3.OpOption, 0, len(opts)+1)
+	opts1 = append(opts1, clientv3.WithPrefix())
+	opts1 = append(opts1, opts1...)
+
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
-	rsp, err := ec.impl.Get(ctx, prefix, clientv3.WithPrefix())
+	rsp, err := ec.impl.Get(ctx, prefix, opts1...)
 	defer cancel()
 	if err == nil {
 		if len(rsp.Kvs) == 0 {
@@ -185,7 +192,8 @@ func (ec *etcdClient) CountWithPrefix(prefix string, readTimeoutSec int) int {
 	}
 }
 
-func (ec *etcdClient) GetKeyValuesWithPrefix(prefix string, order *sortMode, skip, count int, readTimeoutSec int) []string {
+func (ec *etcdClient) GetKeyValuesWithPrefix(prefix string, order *sortMode, skip, count int, readTimeoutSec int,
+	opts ...clientv3.OpOption) []string {
 	var readTimeout time.Duration
 
 	if int(readTimeoutSec) <= 0 {
@@ -196,7 +204,7 @@ func (ec *etcdClient) GetKeyValuesWithPrefix(prefix string, order *sortMode, ski
 
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
 
-	var ops = make([]clientv3.OpOption, 0, 3)
+	var ops = make([]clientv3.OpOption, 0, len(opts)+3)
 	ops = append(ops, clientv3.WithPrefix())
 
 	if order != nil {
@@ -207,6 +215,8 @@ func (ec *etcdClient) GetKeyValuesWithPrefix(prefix string, order *sortMode, ski
 	if count > 0 {
 		ops = append(ops, clientv3.WithLimit(int64(skip+count)))
 	}
+
+	ops = append(ops, opts...)
 
 	rsp, err := ec.impl.Get(ctx, prefix, ops...)
 	defer cancel()
@@ -229,7 +239,8 @@ func (ec *etcdClient) GetKeyValuesWithPrefix(prefix string, order *sortMode, ski
 	}
 }
 
-func (ec *etcdClient) GetKeyObjectsWithPrefix(prefix string, t reflect.Type, order *sortMode, skip, count int, readTimeoutSec int) []any {
+func (ec *etcdClient) GetKeyObjectsWithPrefix(prefix string, t reflect.Type, order *sortMode, skip, count int,
+	readTimeoutSec int, opts ...clientv3.OpOption) []any {
 	var readTimeout time.Duration
 
 	if int(readTimeoutSec) <= 0 {
@@ -240,7 +251,7 @@ func (ec *etcdClient) GetKeyObjectsWithPrefix(prefix string, t reflect.Type, ord
 
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
 
-	var ops = make([]clientv3.OpOption, 0, 3)
+	var ops = make([]clientv3.OpOption, 0, len(opts)+3)
 	ops = append(ops, clientv3.WithPrefix())
 
 	if order != nil {
@@ -252,7 +263,9 @@ func (ec *etcdClient) GetKeyObjectsWithPrefix(prefix string, t reflect.Type, ord
 		ops = append(ops, clientv3.WithLimit(int64(skip+count)))
 	}
 
-	rsp, err := ec.impl.Get(ctx, prefix, clientv3.WithPrefix())
+	ops = append(ops, opts...)
+
+	rsp, err := ec.impl.Get(ctx, prefix, ops...)
 	defer cancel()
 	if err == nil {
 		if len(rsp.Kvs) == 0 {
@@ -291,7 +304,8 @@ func (ec *etcdClient) GetKeyObjectsWithPrefix(prefix string, t reflect.Type, ord
 
 }
 
-func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int) (string, error) {
+func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int,
+	opts ...clientv3.OpOption) (string, error) {
 	var writeTimeout time.Duration
 
 	if int(writeTimeoutSec) <= 0 {
@@ -302,12 +316,13 @@ func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int) (strin
 
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	v := ec.obj2str(data)
-	_, err := ec.impl.Put(ctx, key, v)
+	_, err := ec.impl.Put(ctx, key, v, opts...)
 	cancel()
 	return v, err
 }
 
-func (ec *etcdClient) Delete(key string, writeTimeoutSec int) bool {
+func (ec *etcdClient) Delete(key string, writeTimeoutSec int,
+	opts ...clientv3.OpOption) bool {
 	var writeTimeout time.Duration
 
 	if int(writeTimeoutSec) <= 0 {
@@ -323,12 +338,16 @@ func (ec *etcdClient) Delete(key string, writeTimeoutSec int) bool {
 	//if err != nil {
 	//	return false
 	//}
-	rsp, _ := ec.impl.Delete(ctx, key)
+	rsp, _ := ec.impl.Delete(ctx, key, opts...)
 	cancel()
 	return rsp.Deleted > 0
 }
 
-func (ec *etcdClient) BulkOps(fn func(leaseID clientv3.LeaseID) []clientv3.Op, leaseTtl, writeTimeoutSec int) error {
+type LeaseOpBuild func(leaseID clientv3.LeaseID) []clientv3.Op
+
+type TxnBuild func(txn clientv3.Txn, leaseID clientv3.LeaseID) clientv3.Txn
+
+func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec int) error {
 
 	if leaseTtl <= 0 {
 		leaseTtl = DATA_TTL
@@ -347,7 +366,52 @@ func (ec *etcdClient) BulkOps(fn func(leaseID clientv3.LeaseID) []clientv3.Op, l
 	txn := ec.impl.Txn(ctx)
 
 	if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
-		ops := fn(lease.ID)
+		if txnBuild != nil {
+			txn = txnBuild(txn, lease.ID)
+		}
+
+		rsp, err := txn.Commit()
+
+		if err != nil {
+			return err
+		}
+
+		if rsp.Succeeded {
+			return nil
+		} else {
+			return errors.New("")
+		}
+	} else {
+		return err
+	}
+}
+
+func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) error {
+
+	if leaseTtl <= 0 {
+		leaseTtl = DATA_TTL
+	}
+
+	var writeTimeout time.Duration
+
+	if int(writeTimeoutSec) <= 0 {
+		writeTimeout = DEFAULT_WRITE_TIMEOUT
+	} else {
+		writeTimeout = time.Duration(writeTimeoutSec) * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+	txn := ec.impl.Txn(ctx)
+
+	if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
+		var ops []clientv3.Op
+
+		if fn != nil {
+			ops = fn(lease.ID)
+		} else {
+			ops = []clientv3.Op{}
+		}
 
 		rsp, err := txn.Then(ops...).Commit()
 
@@ -381,5 +445,49 @@ func (ec *etcdClient) obj2str(data any) string {
 		return string(rtn)
 	} else {
 		return ""
+	}
+}
+
+type WatchChannelEventListener func(event *clientv3.Event)
+
+func (ec *etcdClient) WatchKey(key string, listener WatchChannelEventListener, opts ...clientv3.OpOption) {
+	rch := ec.impl.Watch(context.Background(), key, opts...)
+
+	for rsp := range rch {
+		for _, ev := range rsp.Events {
+			if listener != nil {
+				go func() {
+					defer func() {
+						if err := recover(); err != nil {
+							Logger.Warning("Watch Event raise error %v", err)
+						}
+					}()
+					listener(ev)
+				}()
+			}
+		}
+	}
+}
+
+func (ec *etcdClient) WatchKeyWithPrefix(prefix string, listener WatchChannelEventListener, opts ...clientv3.OpOption) {
+	opts1 := make([]clientv3.OpOption, 0, len(opts)+1)
+	opts1 = append(opts1, clientv3.WithPrefix())
+	opts1 = append(opts1, opts...)
+
+	rch := ec.impl.Watch(context.Background(), prefix, opts1...)
+
+	for rsp := range rch {
+		for _, ev := range rsp.Events {
+			if listener != nil {
+				go func() {
+					defer func() {
+						if err := recover(); err != nil {
+							Logger.Warning("Watch Event raise error %v", err)
+						}
+					}()
+					listener(ev)
+				}()
+			}
+		}
 	}
 }
