@@ -310,6 +310,21 @@ func (ec *etcdClient) GetKeyObjectsWithPrefix(prefix string, t reflect.Type, ord
 
 }
 
+func (ec *etcdClient) PutValueOp(key string, data any,
+	opts ...clientv3.OpOption) clientv3.Op {
+	v := ec.Obj2str(data)
+	return clientv3.OpPut(key, v, opts...)
+}
+
+func (ec *etcdClient) PutLeasedValueOp(key string, data any, leaseId clientv3.LeaseID,
+	opts ...clientv3.OpOption) clientv3.Op {
+	var ops = make([]clientv3.OpOption, 0, len(opts)+1)
+	ops = append(ops, opts...)
+	ops = append(ops, clientv3.WithLease(leaseId))
+
+	return ec.PutValueOp(key, data, ops...)
+}
+
 func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int,
 	opts ...clientv3.OpOption) (string, error) {
 	var writeTimeout time.Duration
@@ -359,7 +374,91 @@ func (ec *etcdClient) PutValuePlus(key string, data any, leaseSec, writeTimeoutS
 	} else {
 		return v, err
 	}
+}
 
+type KeepAliveEventListener func(keepAliveResponse clientv3.LeaseKeepAliveResponse) error
+
+func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTimeoutSec int,
+	listener KeepAliveEventListener,
+	opts ...clientv3.OpOption) (string, error) {
+
+	var ops = make([]clientv3.OpOption, 0, len(opts)+1)
+	ops = append(ops, opts...)
+
+	var writeTimeout time.Duration
+
+	if int(writeTimeoutSec) <= 0 {
+		writeTimeout = DEFAULT_WRITE_TIMEOUT
+	} else {
+		writeTimeout = time.Duration(writeTimeoutSec) * time.Second
+	}
+
+	if leaseSec <= 0 {
+		leaseSec = DATA_TTL
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+
+	v := ec.Obj2str(data)
+
+	if lease, err := ec.impl.Grant(ctx, int64(leaseSec)); err == nil {
+		ops = append(ops, clientv3.WithLease(lease.ID))
+		_, err1 := ec.impl.Put(ctx, key, v, ops...)
+
+		if err1 != nil {
+			return v, err1
+		}
+
+		if keepRespChan, err := ec.impl.KeepAlive(context.Background(), lease.ID); err == nil {
+			go func() {
+				defer func() {
+					if err := recover(); err != nil {
+						logger.Debug("退出自动续租Keepalive(%v) 错误状态 :%v", lease.ID, err)
+					} else {
+						logger.Debug("退出自动续租Keepalive(%v)", lease.ID)
+					}
+				}()
+
+				for {
+					select {
+					case keepResp := <-keepRespChan:
+						{
+							if keepRespChan == nil {
+								logger.Debug("租约(%v)已经失效, 退出自动续约", lease.ID)
+								return
+							} else { //每秒会续租一次，所以就会受到一次应答
+								logger.Debug("收到自动续租(%v)应答:%v", lease.ID)
+								if listener != nil {
+									if err := listener(*keepResp); err != nil {
+										logger.Debug("自动续租(%v)应答处理错误:%v", lease.ID, err)
+									} else {
+										logger.Debug("自动续租(%v)应答处理完毕", lease.ID)
+									}
+								}
+							}
+						}
+					}
+				}
+			}()
+		} else {
+			return v, err
+		}
+
+		return v, err1
+	} else {
+		return v, err
+	}
+}
+
+func (ec *etcdClient) DeleteOp(key string,
+	opts ...clientv3.OpOption) clientv3.Op {
+	//
+	//_, err := ec.impl.Get(ctx, key)
+	//if err != nil {
+	//	return false
+	//}
+	return clientv3.OpDelete(key, opts...)
 }
 
 func (ec *etcdClient) Delete(key string, writeTimeoutSec int,
@@ -384,9 +483,9 @@ func (ec *etcdClient) Delete(key string, writeTimeoutSec int,
 	return rsp.Deleted > 0
 }
 
-type LeaseOpBuild func(leaseID clientv3.LeaseID) []clientv3.Op
+type LeaseOpBuild func(leaseID clientv3.LeaseID) ([]clientv3.Op, error)
 
-type TxnBuild func(txn clientv3.Txn, leaseID clientv3.LeaseID) clientv3.Txn
+type TxnBuild func(txn clientv3.Txn, leaseID clientv3.LeaseID) (clientv3.Txn, error)
 
 func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec int) error {
 
@@ -406,7 +505,10 @@ func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec i
 	if leaseTtl > 0 {
 		if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
 			if txnBuild != nil {
-				txn = txnBuild(txn, lease.ID)
+				txn, err = txnBuild(txn, lease.ID)
+				if err != nil {
+					return err
+				}
 			}
 
 			rsp, err := txn.Commit()
@@ -418,14 +520,18 @@ func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec i
 			if rsp.Succeeded {
 				return nil
 			} else {
-				return errors.New("Error")
+				return errors.New("rsp is fail")
 			}
 		} else {
 			return err
 		}
 	} else {
 		if txnBuild != nil {
-			txn = txnBuild(txn, 0)
+			var err error
+			txn, err = txnBuild(txn, 0)
+			if err != nil {
+				return err
+			}
 		}
 
 		rsp, err := txn.Commit()
@@ -437,7 +543,7 @@ func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec i
 		if rsp.Succeeded {
 			return nil
 		} else {
-			return errors.New("Error")
+			return errors.New("rsp is fail")
 		}
 	}
 
@@ -463,7 +569,10 @@ func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) er
 			var ops []clientv3.Op
 
 			if fn != nil {
-				ops = fn(lease.ID)
+				ops, err = fn(lease.ID)
+				if err != nil {
+					return err
+				}
 			} else {
 				ops = []clientv3.Op{}
 			}
@@ -486,9 +595,14 @@ func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) er
 		var ops []clientv3.Op
 
 		if fn != nil {
-			ops = fn(0)
+			var err error
+			ops, err = fn(0)
+			if err != nil {
+				return err
+			}
 		} else {
-			ops = []clientv3.Op{}
+			return nil
+			//ops = []clientv3.Op{}
 		}
 
 		rsp, err := txn.Then(ops...).Commit()
