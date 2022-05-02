@@ -113,8 +113,10 @@ func (ec *etcdClient) KeyValue(key string, readTimeoutSec int, opts ...clientv3.
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
-	rsp, err := ec.impl.Get(ctx, key, opts...)
 	defer cancel()
+
+	rsp, err := ec.impl.Get(ctx, key, opts...)
+
 	if err == nil {
 		if len(rsp.Kvs) == 0 {
 			return "", errors.New("NotFound")
@@ -175,8 +177,10 @@ func (ec *etcdClient) CountWithPrefix(prefix string, readTimeoutSec int, opts ..
 	opts1 = append(opts1, opts1...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
-	rsp, err := ec.impl.Get(ctx, prefix, opts1...)
 	defer cancel()
+
+	rsp, err := ec.impl.Get(ctx, prefix, opts1...)
+
 	if err == nil {
 		if len(rsp.Kvs) == 0 {
 			return 0
@@ -203,6 +207,7 @@ func (ec *etcdClient) GetKeyValuesWithPrefix(prefix string, order *sortMode, ski
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+	defer cancel()
 
 	var ops = make([]clientv3.OpOption, 0, len(opts)+3)
 	ops = append(ops, clientv3.WithPrefix())
@@ -219,7 +224,7 @@ func (ec *etcdClient) GetKeyValuesWithPrefix(prefix string, order *sortMode, ski
 	ops = append(ops, opts...)
 
 	rsp, err := ec.impl.Get(ctx, prefix, ops...)
-	defer cancel()
+
 	if err == nil {
 		if len(rsp.Kvs) == 0 {
 			return nil
@@ -250,6 +255,7 @@ func (ec *etcdClient) GetKeyObjectsWithPrefix(prefix string, t reflect.Type, ord
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+	defer cancel()
 
 	var ops = make([]clientv3.OpOption, 0, len(opts)+3)
 	ops = append(ops, clientv3.WithPrefix())
@@ -266,7 +272,7 @@ func (ec *etcdClient) GetKeyObjectsWithPrefix(prefix string, t reflect.Type, ord
 	ops = append(ops, opts...)
 
 	rsp, err := ec.impl.Get(ctx, prefix, ops...)
-	defer cancel()
+
 	if err == nil {
 		if len(rsp.Kvs) == 0 {
 			return nil
@@ -315,10 +321,45 @@ func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	v := ec.obj2str(data)
+	defer cancel()
+
+	v := ec.Obj2str(data)
 	_, err := ec.impl.Put(ctx, key, v, opts...)
-	cancel()
+
 	return v, err
+}
+
+func (ec *etcdClient) PutValuePlus(key string, data any, leaseSec, writeTimeoutSec int,
+	opts ...clientv3.OpOption) (string, error) {
+
+	var ops = make([]clientv3.OpOption, 0, len(opts)+1)
+	ops = append(ops, opts...)
+
+	var writeTimeout time.Duration
+
+	if int(writeTimeoutSec) <= 0 {
+		writeTimeout = DEFAULT_WRITE_TIMEOUT
+	} else {
+		writeTimeout = time.Duration(writeTimeoutSec) * time.Second
+	}
+
+	if leaseSec <= 0 {
+		leaseSec = DATA_TTL
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+
+	v := ec.Obj2str(data)
+
+	if lease, err := ec.impl.Grant(ctx, int64(leaseSec)); err == nil {
+		ops = append(ops, clientv3.WithLease(lease.ID))
+		_, err1 := ec.impl.Put(ctx, key, v, ops...)
+		return v, err1
+	} else {
+		return v, err
+	}
+
 }
 
 func (ec *etcdClient) Delete(key string, writeTimeoutSec int,
@@ -332,14 +373,14 @@ func (ec *etcdClient) Delete(key string, writeTimeoutSec int,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-
+	defer cancel()
 	//
 	//_, err := ec.impl.Get(ctx, key)
 	//if err != nil {
 	//	return false
 	//}
 	rsp, _ := ec.impl.Delete(ctx, key, opts...)
-	cancel()
+
 	return rsp.Deleted > 0
 }
 
@@ -348,10 +389,6 @@ type LeaseOpBuild func(leaseID clientv3.LeaseID) []clientv3.Op
 type TxnBuild func(txn clientv3.Txn, leaseID clientv3.LeaseID) clientv3.Txn
 
 func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec int) error {
-
-	if leaseTtl <= 0 {
-		leaseTtl = DATA_TTL
-	}
 
 	var writeTimeout time.Duration
 
@@ -363,11 +400,32 @@ func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec i
 
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
+
 	txn := ec.impl.Txn(ctx)
 
-	if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
+	if leaseTtl > 0 {
+		if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
+			if txnBuild != nil {
+				txn = txnBuild(txn, lease.ID)
+			}
+
+			rsp, err := txn.Commit()
+
+			if err != nil {
+				return err
+			}
+
+			if rsp.Succeeded {
+				return nil
+			} else {
+				return errors.New("Error")
+			}
+		} else {
+			return err
+		}
+	} else {
 		if txnBuild != nil {
-			txn = txnBuild(txn, lease.ID)
+			txn = txnBuild(txn, 0)
 		}
 
 		rsp, err := txn.Commit()
@@ -379,18 +437,13 @@ func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec i
 		if rsp.Succeeded {
 			return nil
 		} else {
-			return errors.New("")
+			return errors.New("Error")
 		}
-	} else {
-		return err
 	}
+
 }
 
 func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) error {
-
-	if leaseTtl <= 0 {
-		leaseTtl = DATA_TTL
-	}
 
 	var writeTimeout time.Duration
 
@@ -402,13 +455,38 @@ func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) er
 
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
+
 	txn := ec.impl.Txn(ctx)
 
-	if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
+	if leaseTtl > 0 {
+		if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
+			var ops []clientv3.Op
+
+			if fn != nil {
+				ops = fn(lease.ID)
+			} else {
+				ops = []clientv3.Op{}
+			}
+
+			rsp, err := txn.Then(ops...).Commit()
+
+			if err != nil {
+				return err
+			}
+
+			if rsp.Succeeded {
+				return nil
+			} else {
+				return errors.New("")
+			}
+		} else {
+			return err
+		}
+	} else {
 		var ops []clientv3.Op
 
 		if fn != nil {
-			ops = fn(lease.ID)
+			ops = fn(0)
 		} else {
 			ops = []clientv3.Op{}
 		}
@@ -424,12 +502,10 @@ func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) er
 		} else {
 			return errors.New("")
 		}
-	} else {
-		return err
 	}
 }
 
-func (ec *etcdClient) obj2str(data any) string {
+func (ec *etcdClient) Obj2str(data any) string {
 	if data == nil {
 		return ""
 	}
