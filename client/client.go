@@ -400,7 +400,7 @@ func (ec *etcdClient) PutValuePlus(key string, data any, leaseSec, writeTimeoutS
 	}
 }
 
-type KeepAliveEventListener func(leaseID clientv3.LeaseID, keepAliveResponse clientv3.LeaseKeepAliveResponse) error
+type KeepAliveEventListener func(leaseID clientv3.LeaseID) error
 
 func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTimeoutSec int,
 	listener KeepAliveEventListener,
@@ -442,27 +442,30 @@ func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTim
 					} else {
 						logger.Debug("退出自动续租Keepalive(%v)", lease.ID)
 					}
+
+					if listener != nil {
+						if err := listener(lease.ID); err != nil {
+							//		logger.Debug("自动续租(%v)应答处理错误:%v", lease.ID, err)
+						} else {
+							//		logger.Debug("自动续租(%v)应答处理完毕", lease.ID)
+						}
+					}
+
 				}()
 
 				for {
 					select {
-					case keepResp := <-keepRespChan:
+					case <-keepRespChan:
 						{
 							if keepRespChan == nil {
 								logger.Debug("租约(%v)已经失效, 退出自动续约", lease.ID)
 								return
 							} else { //每秒会续租一次，所以就会受到一次应答
-								logger.Debug("收到自动续租(%v)应答", lease.ID)
-								if listener != nil {
-									if err := listener(lease.ID, *keepResp); err != nil {
-										logger.Debug("自动续租(%v)应答处理错误:%v", lease.ID, err)
-									} else {
-										logger.Debug("自动续租(%v)应答处理完毕", lease.ID)
-									}
-								}
+								//logger.Debug("收到自动续租(%v)应答", lease.ID)
 							}
 						}
 					}
+					time.Sleep(1 * time.Nanosecond)
 				}
 			}()
 		} else {
