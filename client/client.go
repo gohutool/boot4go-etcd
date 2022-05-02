@@ -376,7 +376,7 @@ func (ec *etcdClient) PutValuePlus(key string, data any, leaseSec, writeTimeoutS
 	}
 }
 
-type KeepAliveEventListener func(keepAliveResponse clientv3.LeaseKeepAliveResponse) error
+type KeepAliveEventListener func(leaseID clientv3.LeaseID, keepAliveResponse clientv3.LeaseKeepAliveResponse) error
 
 func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTimeoutSec int,
 	listener KeepAliveEventListener,
@@ -430,7 +430,7 @@ func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTim
 							} else { //每秒会续租一次，所以就会受到一次应答
 								logger.Debug("收到自动续租(%v)应答:%v", lease.ID)
 								if listener != nil {
-									if err := listener(*keepResp); err != nil {
+									if err := listener(lease.ID, *keepResp); err != nil {
 										logger.Debug("自动续租(%v)应答处理错误:%v", lease.ID, err)
 									} else {
 										logger.Debug("自动续租(%v)应答处理完毕", lease.ID)
