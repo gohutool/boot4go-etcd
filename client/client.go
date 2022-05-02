@@ -428,7 +428,7 @@ func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTim
 								logger.Debug("租约(%v)已经失效, 退出自动续约", lease.ID)
 								return
 							} else { //每秒会续租一次，所以就会受到一次应答
-								logger.Debug("收到自动续租(%v)应答:%v", lease.ID)
+								logger.Debug("收到自动续租(%v)应答", lease.ID)
 								if listener != nil {
 									if err := listener(lease.ID, *keepResp); err != nil {
 										logger.Debug("自动续租(%v)应答处理错误:%v", lease.ID, err)
