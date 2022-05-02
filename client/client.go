@@ -325,6 +325,30 @@ func (ec *etcdClient) PutLeasedValueOp(key string, data any, leaseId clientv3.Le
 	return ec.PutValueOp(key, data, ops...)
 }
 
+func (ec *etcdClient) PutLeasedValue(key string, data any, leaseId clientv3.LeaseID,
+	writeTimeoutSec int,
+	opts ...clientv3.OpOption) (string, error) {
+	var writeTimeout time.Duration
+
+	if int(writeTimeoutSec) <= 0 {
+		writeTimeout = DEFAULT_WRITE_TIMEOUT
+	} else {
+		writeTimeout = time.Duration(writeTimeoutSec) * time.Second
+	}
+
+	var ops = make([]clientv3.OpOption, 0, len(opts)+1)
+	ops = append(ops, opts...)
+	ops = append(ops, clientv3.WithLease(leaseId))
+
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+
+	v := ec.Obj2str(data)
+	_, err := ec.impl.Put(ctx, key, v, ops...)
+
+	return v, err
+}
+
 func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int,
 	opts ...clientv3.OpOption) (string, error) {
 	var writeTimeout time.Duration
@@ -345,7 +369,7 @@ func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int,
 }
 
 func (ec *etcdClient) PutValuePlus(key string, data any, leaseSec, writeTimeoutSec int,
-	opts ...clientv3.OpOption) (string, error) {
+	opts ...clientv3.OpOption) (string, clientv3.LeaseID, error) {
 
 	var ops = make([]clientv3.OpOption, 0, len(opts)+1)
 	ops = append(ops, opts...)
@@ -370,9 +394,9 @@ func (ec *etcdClient) PutValuePlus(key string, data any, leaseSec, writeTimeoutS
 	if lease, err := ec.impl.Grant(ctx, int64(leaseSec)); err == nil {
 		ops = append(ops, clientv3.WithLease(lease.ID))
 		_, err1 := ec.impl.Put(ctx, key, v, ops...)
-		return v, err1
+		return v, lease.ID, err1
 	} else {
-		return v, err
+		return v, lease.ID, err
 	}
 }
 
@@ -380,7 +404,7 @@ type KeepAliveEventListener func(leaseID clientv3.LeaseID, keepAliveResponse cli
 
 func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTimeoutSec int,
 	listener KeepAliveEventListener,
-	opts ...clientv3.OpOption) (string, error) {
+	opts ...clientv3.OpOption) (string, clientv3.LeaseID, error) {
 
 	var ops = make([]clientv3.OpOption, 0, len(opts)+1)
 	ops = append(ops, opts...)
@@ -407,7 +431,7 @@ func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTim
 		_, err1 := ec.impl.Put(ctx, key, v, ops...)
 
 		if err1 != nil {
-			return v, err1
+			return v, lease.ID, err1
 		}
 
 		if keepRespChan, err := ec.impl.KeepAlive(context.Background(), lease.ID); err == nil {
@@ -442,12 +466,12 @@ func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTim
 				}
 			}()
 		} else {
-			return v, err
+			return v, lease.ID, err
 		}
 
-		return v, err1
+		return v, lease.ID, err1
 	} else {
-		return v, err
+		return v, lease.ID, err
 	}
 }
 
