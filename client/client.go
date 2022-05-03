@@ -9,7 +9,6 @@ import (
 	"github.com/gohutool/log4go"
 	"golang.org/x/net/context"
 	"reflect"
-	"strconv"
 	"time"
 )
 
@@ -183,15 +182,16 @@ func (ec *etcdClient) CountWithPrefix(prefix string, readTimeoutSec int, opts ..
 	rsp, err := ec.impl.Get(ctx, prefix, opts1...)
 
 	if err == nil {
-		if len(rsp.Kvs) == 0 {
-			return 0
-		} else {
-			if count, error := strconv.Atoi(rsp.Kvs[0].String()); error == nil {
-				return count
-			} else {
-				panic(err.Error())
-			}
-		}
+		return int(rsp.Count)
+		//if len(rsp.Count) == 0 {
+		//	return 0
+		//} else {
+		//	if count, error := strconv.Atoi(rsp.Kvs[0].String()); error == nil {
+		//		return count
+		//	} else {
+		//		panic(err.Error())
+		//	}
+		//}
 	} else {
 		panic(err.Error())
 	}
