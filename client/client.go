@@ -174,7 +174,8 @@ func (ec *etcdClient) CountWithPrefix(prefix string, readTimeoutSec int, opts ..
 
 	opts1 := make([]clientv3.OpOption, 0, len(opts)+1)
 	opts1 = append(opts1, clientv3.WithPrefix())
-	opts1 = append(opts1, opts1...)
+	opts1 = append(opts1, clientv3.WithCountOnly())
+	opts1 = append(opts1, opts...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
 	defer cancel()
