@@ -9,7 +9,7 @@ replace google.golang.org/grpc => google.golang.org/grpc v1.26.0
 require (
 	github.com/coreos/etcd v3.3.27+incompatible
 	github.com/gohutool/boot4go-fastjson v1.0.7
-	github.com/gohutool/boot4go-util v1.0.20
+	github.com/gohutool/boot4go-util v1.0.21
 	github.com/gohutool/log4go v1.0.2
 	golang.org/x/net v0.0.0-20220425223048-2871e0cb64e4
 )

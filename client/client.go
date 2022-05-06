@@ -3,12 +3,15 @@ package client
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/coreos/etcd/clientv3"
+	"github.com/coreos/etcd/clientv3/concurrency"
 	fastjson "github.com/gohutool/boot4go-fastjson"
 	"github.com/gohutool/boot4go-util"
 	"github.com/gohutool/log4go"
 	"golang.org/x/net/context"
 	"reflect"
+	"strconv"
 	"time"
 )
 
@@ -99,6 +102,13 @@ func (ec *etcdClient) Init(endPoints []string, username, password string, dialTi
 	}
 	ec.impl = c
 	return nil
+}
+
+func (ec *etcdClient) Close() error {
+	if ec.impl != nil {
+		return ec.impl.Close()
+	}
+	return errors.New("NullPointException")
 }
 
 func (ec *etcdClient) KeyValue(key string, readTimeoutSec int, opts ...clientv3.OpOption) (string, error) {
@@ -348,6 +358,24 @@ func (ec *etcdClient) PutLeasedValue(key string, data any, leaseId clientv3.Leas
 	_, err := ec.impl.Put(ctx, key, v, ops...)
 
 	return v, err
+}
+
+func (ec *etcdClient) PutText(key string, data string, writeTimeoutSec int,
+	opts ...clientv3.OpOption) error {
+	var writeTimeout time.Duration
+
+	if int(writeTimeoutSec) <= 0 {
+		writeTimeout = DEFAULT_WRITE_TIMEOUT
+	} else {
+		writeTimeout = time.Duration(writeTimeoutSec) * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+
+	_, err := ec.impl.Put(ctx, key, data, opts...)
+
+	return err
 }
 
 func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int,
@@ -707,5 +735,275 @@ func (ec *etcdClient) WatchKeyWithPrefix(prefix string, listener WatchChannelEve
 				}()
 			}
 		}
+	}
+}
+
+type Lock struct {
+	s *concurrency.Session
+	m *concurrency.Mutex
+}
+
+const DEFAULT_LOCK_TTL = 60
+
+var LockError = lockError{"lock error"}
+
+var LockByOther = lockError{"lock by other"}
+
+type lockError struct {
+	s string
+}
+
+func (l *lockError) New(s string) lockError {
+	return lockError{s: s}
+}
+
+func (l lockError) Error() string {
+	return l.s
+}
+
+func (l *Lock) Session() *concurrency.Session {
+	return l.s
+}
+
+func (l *Lock) Mutex() *concurrency.Mutex {
+	return l.m
+}
+
+// LockAndDo
+// Lock and Do something, after something is done will unlock and release lock resource automatically
+// If key is locker by other, current goroutine will be blocked
+func (ec *etcdClient) LockAndDo(key string, leaseSecond int, do func() (any, error)) (rtn any, rtnErr error) {
+	lock, err := EtcdClient.Lock(key, leaseSecond)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if err := recover(); err != nil {
+			rtn = nil
+
+			if lErr, isLockError := err.(lockError); isLockError {
+				rtnErr = lErr
+			} else {
+				rtnErr = errors.New(fmt.Sprintf("%v", err))
+			}
+		}
+		k := lock.m.Key()
+		lock.UnLock()
+		logger.Debug("session[%q][%q] 解锁。 time：%d", key, k, time.Now().Unix())
+	}()
+
+	k := lock.m.Key()
+	logger.Debug("session[%q][%q] 上锁成功。 time：%d", key, k, time.Now().Unix())
+
+	return do()
+}
+
+// TryLock
+// Use this function, You must invoke UnLock in defer segment to release the lock resource. The best way is use LockAndDo,
+// it will release all resources automatically
+// If key is locker by other, it wil return lock object with nil without blocking
+func (ec *etcdClient) TryLock(key string, leaseSecond int) (rtn *Lock, rtnErr error) {
+	if leaseSecond <= 0 {
+		leaseSecond = DEFAULT_LOCK_TTL
+	}
+
+	s2, err := concurrency.NewSession(ec.Get(), concurrency.WithTTL(leaseSecond))
+
+	if err != nil {
+		return nil, LockError.New(fmt.Sprintf("Lock error : %v", err))
+	}
+
+	defer func() {
+		if err := recover(); err != nil {
+			rtn = nil
+			rtnErr = LockError.New(fmt.Sprintf("Lock error : %v", err))
+			logger.Warning("Lock error : %v", err)
+			s2.Close()
+		}
+	}()
+
+	m2 := concurrency.NewMutex(s2, key)
+
+	myKey := fmt.Sprintf("%s%x", key+"/", s2.Lease())
+	cmp := clientv3.Compare(clientv3.CreateRevision(myKey), "=", 0)
+	// put self in lock waiters via myKey; oldest waiter holds lock
+	put := clientv3.OpPut(myKey, "", clientv3.WithLease(s2.Lease()))
+	// reuse key in case this session already holds the lock
+	get := clientv3.OpGet(myKey)
+	// fetch current holder to complete uncontended path with only one RPC
+	getOwner := clientv3.OpGet(key+"/", clientv3.WithFirstCreate()...)
+	resp, err := ec.Get().Txn(context.TODO()).If(cmp).Then(put, getOwner).Else(get, getOwner).Commit()
+	if err != nil {
+		return nil, err
+	}
+	myRev := resp.Header.Revision
+	if !resp.Succeeded {
+		myRev = resp.Responses[0].GetResponseRange().Kvs[0].CreateRevision
+	}
+
+	if err := util4go.SetUnExportFieldValue(m2, "myKey", myKey); err != nil {
+		panic(err.Error())
+	}
+	if err := util4go.SetUnExportFieldValue(m2, "myRev", myRev); err != nil {
+		panic(err.Error())
+	}
+
+	// if no key on prefix / the minimum rev is key, already hold the lock
+	ownerKey := resp.Responses[1].GetResponseRange().Kvs
+
+	if len(ownerKey) == 0 || ownerKey[0].CreateRevision == myRev {
+
+		if err := util4go.SetUnExportFieldValue(m2, "hdr", resp.Header); err != nil {
+			panic(err.Error())
+		}
+
+		return &Lock{s: s2, m: m2}, nil
+	} else {
+		ec.Get().Delete(context.TODO(), myKey)
+		s2.Close()
+	}
+
+	return nil, LockByOther
+}
+
+// Lock
+// Use this function, You must invoke UnLock in defer segment to release the lock resource. The best way is use LockAndDo,
+// it will release all resources automatically
+// If key is locker by other, current goroutine will be blocked
+func (ec *etcdClient) Lock(key string, leaseSecond int) (rtn *Lock, rtnErr error) {
+	if leaseSecond <= 0 {
+		leaseSecond = DEFAULT_LOCK_TTL
+	}
+
+	s2, err := concurrency.NewSession(ec.Get(), concurrency.WithTTL(leaseSecond))
+
+	if err != nil {
+		return nil, LockError.New(fmt.Sprintf("Lock error : %v", err))
+	}
+
+	defer func() {
+		if err := recover(); err != nil {
+			rtn = nil
+			rtnErr = LockError.New(fmt.Sprintf("Lock error : %v", err))
+			logger.Warning("Lock error : %v", err)
+			s2.Close()
+		}
+	}()
+
+	m2 := concurrency.NewMutex(s2, key)
+
+	rtn = &Lock{s: s2, m: m2}
+	rtnErr = nil
+
+	if err := m2.Lock(context.TODO()); err != nil {
+		rtn = nil
+		logger.Warning("Lock error : %v", err)
+		rtnErr = LockError.New(fmt.Sprintf("Lock error : %v", err))
+	}
+
+	return
+}
+
+// UnLock
+// You should invoke Unlock function to release lock resources in defer segment
+func (l *Lock) UnLock() error {
+	defer func() {
+		if err := recover(); err != nil {
+			logger.Warning("Unlock error : %v", err)
+		}
+
+		if l.s != nil {
+			l.s.Close()
+		}
+	}()
+
+	if err := l.m.Unlock(context.TODO()); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+type etcdError struct {
+	s string
+}
+
+var NotFoundKeyError = etcdError{"NotFoundKey"}
+
+func (e etcdError) Error() string {
+	return e.s
+}
+
+func (ec *etcdClient) GetInt(key string, readTimeoutSec int) (int64, error) { // opts ...clientv3.OpOption
+
+	var readTimeout time.Duration
+
+	if int(readTimeoutSec) <= 0 {
+		readTimeout = DEFAULT_READ_TIMEOUT
+	} else {
+		readTimeout = time.Duration(readTimeoutSec) * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+	defer cancel()
+
+	//rsp, err := ec.impl.Get(ctx, key, opts...)
+	rsp, err := ec.impl.Get(ctx, key)
+
+	if err == nil {
+		if len(rsp.Kvs) == 0 {
+			return 0, NotFoundKeyError
+		} else {
+			//var count int64
+			count, err := strconv.ParseInt(string(rsp.Kvs[0].Value), 10, 64)
+
+			if err == nil {
+				return count, nil
+			} else {
+				return 0, err
+			}
+		}
+	} else {
+		return 0, err
+	}
+}
+
+func (ec *etcdClient) PutInt(key string, i int64, writeTimeoutSec int) error {
+	return ec.PutText(key, strconv.FormatInt(i, 10), writeTimeoutSec)
+}
+
+const LOCK_PREFIX = "/boot4go-lock/_lock/_%s"
+
+func (ec *etcdClient) formatLockKey(key string) string {
+	return fmt.Sprintf(LOCK_PREFIX, key)
+}
+
+func (ec *etcdClient) Incr(key string, count int64, leaseSecond int) (int64, error) {
+	rtn, err := ec.LockAndDo(ec.formatLockKey(key), leaseSecond, func() (any, error) {
+		v, er := ec.GetInt(key, 0)
+
+		if er != nil {
+			if er != NotFoundKeyError {
+				return 0, er
+			} else {
+				v = 0
+			}
+		}
+		v = v + count
+		er = ec.PutInt(key, v, 0)
+
+		if er == nil {
+			return v, nil
+		} else {
+			return 0, er
+		}
+	})
+
+	if err != nil {
+		return 0, err
+	} else {
+		return rtn.(int64), nil
 	}
 }
