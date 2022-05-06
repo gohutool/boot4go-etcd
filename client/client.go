@@ -429,7 +429,7 @@ func (ec *etcdClient) PutValuePlus(key string, data any, leaseSec, writeTimeoutS
 	}
 }
 
-type KeepAliveEventListener func(leaseID clientv3.LeaseID) error
+type KeepAliveEventListener func(lease clientv3.LeaseID) error
 
 func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTimeoutSec int,
 	listener KeepAliveEventListener,
@@ -467,11 +467,10 @@ func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTim
 			go func() {
 				defer func() {
 					if err := recover(); err != nil {
-						logger.Debug("退出自动续租Keepalive(%v) 错误状态 :%v", lease.ID, err)
+						logger.Debug("*****退出自动续租Keepalive(%v) 错误状态 :%v", lease.ID, err)
 					} else {
-						logger.Debug("退出自动续租Keepalive(%v)", lease.ID)
+						logger.Debug("*****退出自动续租Keepalive(%v)", lease.ID)
 					}
-
 					if listener != nil {
 						if err := listener(lease.ID); err != nil {
 							//		logger.Debug("自动续租(%v)应答处理错误:%v", lease.ID, err)
@@ -479,7 +478,6 @@ func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTim
 							//		logger.Debug("自动续租(%v)应答处理完毕", lease.ID)
 						}
 					}
-
 				}()
 
 				for {
