@@ -541,7 +541,7 @@ type LeaseOpBuild func(leaseID clientv3.LeaseID) ([]clientv3.Op, error)
 
 type TxnBuild func(txn clientv3.Txn, leaseID clientv3.LeaseID) (clientv3.Txn, error)
 
-func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec int) error {
+func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec int) (clientv3.LeaseID, error) {
 
 	var writeTimeout time.Duration
 
@@ -561,49 +561,49 @@ func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec i
 			if txnBuild != nil {
 				txn, err = txnBuild(txn, lease.ID)
 				if err != nil {
-					return err
+					return clientv3.NoLease, err
 				}
 			}
 
 			rsp, err := txn.Commit()
 
 			if err != nil {
-				return err
+				return clientv3.NoLease, err
 			}
 
 			if rsp.Succeeded {
-				return nil
+				return lease.ID, nil
 			} else {
-				return errors.New("rsp is fail")
+				return clientv3.NoLease, errors.New("rsp is fail")
 			}
 		} else {
-			return err
+			return clientv3.NoLease, err
 		}
 	} else {
 		if txnBuild != nil {
 			var err error
 			txn, err = txnBuild(txn, 0)
 			if err != nil {
-				return err
+				return clientv3.NoLease, err
 			}
 		}
 
 		rsp, err := txn.Commit()
 
 		if err != nil {
-			return err
+			return clientv3.NoLease, err
 		}
 
 		if rsp.Succeeded {
-			return nil
+			return clientv3.NoLease, nil
 		} else {
-			return errors.New("rsp is fail")
+			return clientv3.NoLease, errors.New("rsp is fail")
 		}
 	}
 
 }
 
-func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) error {
+func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) (clientv3.LeaseID, error) {
 
 	var writeTimeout time.Duration
 
@@ -625,7 +625,7 @@ func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) er
 			if fn != nil {
 				ops, err = fn(lease.ID)
 				if err != nil {
-					return err
+					return clientv3.NoLease, err
 				}
 			} else {
 				ops = []clientv3.Op{}
@@ -634,41 +634,41 @@ func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) er
 			rsp, err := txn.Then(ops...).Commit()
 
 			if err != nil {
-				return err
+				return clientv3.NoLease, err
 			}
 
 			if rsp.Succeeded {
-				return nil
+				return lease.ID, nil
 			} else {
-				return errors.New("")
+				return clientv3.NoLease, errors.New("")
 			}
 		} else {
-			return err
+			return clientv3.NoLease, err
 		}
 	} else {
 		var ops []clientv3.Op
 
 		if fn != nil {
 			var err error
-			ops, err = fn(0)
+			ops, err = fn(clientv3.NoLease)
 			if err != nil {
-				return err
+				return clientv3.NoLease, err
 			}
 		} else {
-			return nil
+			return clientv3.NoLease, nil
 			//ops = []clientv3.Op{}
 		}
 
 		rsp, err := txn.Then(ops...).Commit()
 
 		if err != nil {
-			return err
+			return clientv3.NoLease, err
 		}
 
 		if rsp.Succeeded {
-			return nil
+			return clientv3.NoLease, nil
 		} else {
-			return errors.New("")
+			return clientv3.NoLease, errors.New("")
 		}
 	}
 }
