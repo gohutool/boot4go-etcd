@@ -2,10 +2,11 @@ package client
 
 import (
 	"fmt"
-	"github.com/coreos/etcd/clientv3"
-	"github.com/coreos/etcd/clientv3/concurrency"
 	"github.com/gohutool/log4go"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/concurrency"
 	"golang.org/x/net/context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -518,7 +519,7 @@ func TestIncrConcurrent(t *testing.T) {
 	for idx := 1; idx <= count; idx++ {
 		go func(idx int) {
 			for j := 0; j < loop; j++ {
-				v, err := EtcdClient.Incr(key, 1, 60)
+				v, err := EtcdClient.Incr(key+strconv.Itoa(j), 1, 60)
 				if err == nil {
 					logger.Info("goroutine-%v=%v", idx, v)
 				} else {
