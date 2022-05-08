@@ -255,6 +255,59 @@ func (ec *etcdClient) GetKeyValuesWithPrefix(prefix string, order *sortMode, ski
 	}
 }
 
+type KeyValue struct {
+	Key   string
+	Value string
+}
+
+func (ec *etcdClient) GetKeyAndValuesWithPrefix(prefix string, order *sortMode, skip, count int, readTimeoutSec int,
+	opts ...clientv3.OpOption) []KeyValue {
+	var readTimeout time.Duration
+
+	if int(readTimeoutSec) <= 0 {
+		readTimeout = DEFAULT_READ_TIMEOUT
+	} else {
+		readTimeout = time.Duration(readTimeoutSec) * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+	defer cancel()
+
+	var ops = make([]clientv3.OpOption, 0, len(opts)+3)
+	ops = append(ops, clientv3.WithPrefix())
+
+	if order != nil {
+		ops = append(ops, clientv3.WithSort(
+			clientv3.SortTarget(order.SortTarget), clientv3.SortOrder(order.SortOrder)))
+	}
+
+	if count > 0 {
+		ops = append(ops, clientv3.WithLimit(int64(skip+count)))
+	}
+
+	ops = append(ops, opts...)
+
+	rsp, err := ec.impl.Get(ctx, prefix, ops...)
+
+	if err == nil {
+		if len(rsp.Kvs) == 0 {
+			return nil
+		} else {
+			rtn := make([]KeyValue, 0, len(rsp.Kvs))
+			for idx, b := range rsp.Kvs {
+				if idx < skip {
+					continue
+				}
+
+				rtn = append(rtn, KeyValue{string(b.Key), string(b.Value)})
+			}
+			return rtn
+		}
+	} else {
+		return nil
+	}
+}
+
 func (ec *etcdClient) GetKeyObjectsWithPrefix(prefix string, t reflect.Type, order *sortMode, skip, count int,
 	readTimeoutSec int, opts ...clientv3.OpOption) []any {
 	var readTimeout time.Duration
