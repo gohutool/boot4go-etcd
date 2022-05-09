@@ -856,6 +856,7 @@ func (ec *etcdClient) LockAndDo(key string, leaseSecond int, do func() (any, err
 // it will release all resources automatically
 // If key is locker by other, it wil return lock object with nil without blocking
 func (ec *etcdClient) TryLock(key string, leaseSecond int) (rtn *Lock, rtnErr error) {
+	key = ec.formatLockKey(key)
 	if leaseSecond <= 0 {
 		leaseSecond = DEFAULT_LOCK_TTL
 	}
@@ -924,6 +925,7 @@ func (ec *etcdClient) TryLock(key string, leaseSecond int) (rtn *Lock, rtnErr er
 // it will release all resources automatically
 // If key is locker by other, current goroutine will be blocked
 func (ec *etcdClient) Lock(key string, leaseSecond int) (rtn *Lock, rtnErr error) {
+	key = ec.formatLockKey(key)
 	if leaseSecond <= 0 {
 		leaseSecond = DEFAULT_LOCK_TTL
 	}
@@ -1028,11 +1030,11 @@ func (ec *etcdClient) PutInt(key string, i int64, writeTimeoutSec int) error {
 const LOCK_PREFIX = "/boot4go-lock/_lock/_%s"
 
 func (ec *etcdClient) formatLockKey(key string) string {
-	return fmt.Sprintf(LOCK_PREFIX, key)
+	return fmt.Sprintf(LOCK_PREFIX, key+"_")
 }
 
 func (ec *etcdClient) Incr(key string, count int64, leaseSecond int) (int64, error) {
-	rtn, err := ec.LockAndDo(ec.formatLockKey(key), leaseSecond, func() (any, error) {
+	rtn, err := ec.LockAndDo(key, leaseSecond, func() (any, error) {
 		v, er := ec.GetInt(key, 0)
 
 		if er != nil {
