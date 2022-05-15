@@ -538,3 +538,25 @@ func TestIncrConcurrent(t *testing.T) {
 	wg.Wait()
 	time.Sleep(2 * time.Second)
 }
+
+func TestPutWithLease(t *testing.T) {
+
+	key := "/test/test_lease/sample"
+
+	err := EtcdClient.Init([]string{"192.168.56.101:32379"}, "", "", 30)
+
+	if err == nil {
+		logger.Info("Etcd is connect")
+	} else {
+		panic("Etcd can not connect")
+	}
+
+	EtcdClient.PutValue(key, "hello world", 0)
+
+	EtcdClient.PutLeasedValue(key, "hello world", 20, 0)
+
+	EtcdClient.PutValuePlus(key, "hello world", 20, 0)
+
+	logger.Info("Test Over")
+	time.Sleep(2 * time.Second)
+}

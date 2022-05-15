@@ -376,17 +376,35 @@ func (ec *etcdClient) GetKeyObjectsWithPrefix(prefix string, t reflect.Type, ord
 
 func (ec *etcdClient) PutValueOp(key string, data any,
 	opts ...clientv3.OpOption) clientv3.Op {
-	v := ec.Obj2str(data)
+	var v string
+
+	switch data.(type) {
+	case string:
+		v = data.(string)
+	default:
+		v = ec.Obj2str(data)
+	}
+
 	return clientv3.OpPut(key, v, opts...)
 }
 
 func (ec *etcdClient) PutLeasedValueOp(key string, data any, leaseId clientv3.LeaseID,
-	opts ...clientv3.OpOption) clientv3.Op {
-	var ops = make([]clientv3.OpOption, 0, len(opts)+1)
-	ops = append(ops, opts...)
-	ops = append(ops, clientv3.WithLease(leaseId))
+	opts ...clientv3.OpOption) []clientv3.Op {
 
-	return ec.PutValueOp(key, data, ops...)
+	if leaseId == clientv3.NoLease {
+		return []clientv3.Op{
+			ec.PutValueOp(key, data),
+		}
+	} else {
+		var ops = make([]clientv3.OpOption, 0, len(opts)+1)
+		ops = append(ops, opts...)
+		ops = append(ops, clientv3.WithLease(leaseId))
+
+		return []clientv3.Op{
+			ec.PutValueOp(key, data, ops...),
+			ec.PutValueOp(ec.formatLeaseKey(leaseId), key, clientv3.WithLease(leaseId)),
+		}
+	}
 }
 
 func (ec *etcdClient) PutLeasedValue(key string, data any, leaseId clientv3.LeaseID,
@@ -400,17 +418,31 @@ func (ec *etcdClient) PutLeasedValue(key string, data any, leaseId clientv3.Leas
 		writeTimeout = time.Duration(writeTimeoutSec) * time.Second
 	}
 
-	var ops = make([]clientv3.OpOption, 0, len(opts)+1)
-	ops = append(ops, opts...)
-	ops = append(ops, clientv3.WithLease(leaseId))
-
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
 
-	v := ec.Obj2str(data)
-	_, err := ec.impl.Put(ctx, key, v, ops...)
+	if leaseId != clientv3.NoLease && int64(leaseId) > 0 {
+		var ops = make([]clientv3.OpOption, 0, len(opts)+1)
+		ops = append(ops, opts...)
+		ops = append(ops, clientv3.WithLease(leaseId))
 
-	return v, err
+		v := ec.Obj2str(data)
+		_, err := ec.impl.Put(ctx, key, v, ops...)
+
+		if err != nil {
+			return v, err
+		}
+
+		_, err = ec.impl.Put(ctx, ec.formatLeaseKey(leaseId), key, clientv3.WithLease(leaseId))
+
+		return v, err
+	} else {
+		v := ec.Obj2str(data)
+		_, err := ec.impl.Put(ctx, key, v, opts...)
+
+		return v, err
+	}
+
 }
 
 func (ec *etcdClient) PutText(key string, data string, writeTimeoutSec int,
@@ -433,6 +465,16 @@ func (ec *etcdClient) PutText(key string, data string, writeTimeoutSec int,
 
 func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int,
 	opts ...clientv3.OpOption) (string, error) {
+
+	var v string
+
+	switch data.(type) {
+	case string:
+		v = data.(string)
+	default:
+		v = ec.Obj2str(data)
+	}
+
 	var writeTimeout time.Duration
 
 	if int(writeTimeoutSec) <= 0 {
@@ -444,7 +486,6 @@ func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int,
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
 
-	v := ec.Obj2str(data)
 	_, err := ec.impl.Put(ctx, key, v, opts...)
 
 	return v, err
@@ -452,6 +493,15 @@ func (ec *etcdClient) PutValue(key string, data any, writeTimeoutSec int,
 
 func (ec *etcdClient) PutValuePlus(key string, data any, leaseSec, writeTimeoutSec int,
 	opts ...clientv3.OpOption) (string, clientv3.LeaseID, error) {
+
+	var v string
+
+	switch data.(type) {
+	case string:
+		v = data.(string)
+	default:
+		v = ec.Obj2str(data)
+	}
 
 	var ops = make([]clientv3.OpOption, 0, len(opts)+1)
 	ops = append(ops, opts...)
@@ -464,21 +514,39 @@ func (ec *etcdClient) PutValuePlus(key string, data any, leaseSec, writeTimeoutS
 		writeTimeout = time.Duration(writeTimeoutSec) * time.Second
 	}
 
-	if leaseSec <= 0 {
-		leaseSec = DATA_TTL
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
 
-	v := ec.Obj2str(data)
+	if leaseSec > 0 {
 
-	if lease, err := ec.impl.Grant(ctx, int64(leaseSec)); err == nil {
-		ops = append(ops, clientv3.WithLease(lease.ID))
-		_, err1 := ec.impl.Put(ctx, key, v, ops...)
-		return v, lease.ID, err1
+		if lease, err := ec.impl.Grant(ctx, int64(leaseSec)); err == nil {
+			ops = append(ops, clientv3.WithLease(lease.ID))
+			_, err1 := ec.impl.Put(ctx, key, v, ops...)
+
+			if err1 != nil {
+				return v, clientv3.NoLease, err1
+			}
+
+			_, err1 = ec.impl.Put(ctx, ec.formatLeaseKey(lease.ID), key, clientv3.WithLease(lease.ID))
+
+			if err1 != nil {
+				return v, clientv3.NoLease, err1
+			}
+
+			return v, lease.ID, err1
+
+		} else {
+			return v, lease.ID, err
+		}
 	} else {
-		return v, lease.ID, err
+
+		_, err1 := ec.impl.Put(ctx, key, v, ops...)
+
+		if err1 != nil {
+			return v, clientv3.NoLease, err1
+		}
+
+		return v, clientv3.NoLease, nil
 	}
 }
 
@@ -590,9 +658,11 @@ func (ec *etcdClient) Delete(key string, writeTimeoutSec int,
 	return rsp.Deleted > 0
 }
 
-type LeaseOpBuild func(leaseID clientv3.LeaseID) ([]clientv3.Op, error)
+// LeaseOpBuild return clientv3.Op[], string to description of lease, error if raise error
+type LeaseOpBuild func(leaseID clientv3.LeaseID) ([]clientv3.Op, string, error)
 
-type TxnBuild func(txn clientv3.Txn, leaseID clientv3.LeaseID) (clientv3.Txn, error)
+// TxnBuild return clientv3.Op[], string to description of lease, error if raise error
+type TxnBuild func(txn clientv3.Txn, leaseID clientv3.LeaseID) (clientv3.Txn, string, error)
 
 func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec int) (clientv3.LeaseID, error) {
 
@@ -611,11 +681,15 @@ func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec i
 
 	if leaseTtl > 0 {
 		if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
+
+			var leaseDesc string
+
 			if txnBuild != nil {
-				txn, err = txnBuild(txn, lease.ID)
+				txn, leaseDesc, err = txnBuild(txn, lease.ID)
 				if err != nil {
 					return clientv3.NoLease, err
 				}
+				txn.Then(ec.PutValueOp(ec.formatLeaseKey(lease.ID), leaseDesc, clientv3.WithLease(lease.ID)))
 			}
 
 			rsp, err := txn.Commit()
@@ -635,7 +709,7 @@ func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec i
 	} else {
 		if txnBuild != nil {
 			var err error
-			txn, err = txnBuild(txn, 0)
+			txn, _, err = txnBuild(txn, 0)
 			if err != nil {
 				return clientv3.NoLease, err
 			}
@@ -675,14 +749,23 @@ func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) (c
 		if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
 			var ops []clientv3.Op
 
+			var leaseDesc string
+
 			if fn != nil {
-				ops, err = fn(lease.ID)
+				ops, leaseDesc, err = fn(lease.ID)
 				if err != nil {
 					return clientv3.NoLease, err
 				}
 			} else {
 				ops = []clientv3.Op{}
 			}
+
+			if len(ops) > 0 && !util4go.IsEmpty(leaseDesc) {
+				ops = append(ops,
+					ec.PutValueOp(ec.formatLeaseKey(lease.ID), leaseDesc, clientv3.WithLease(lease.ID)))
+			}
+
+			//ec.PutValueOp(ec.formatLeaseKey(leaseId), key, clientv3.WithLease(leaseId)),
 
 			rsp, err := txn.Then(ops...).Commit()
 
@@ -703,7 +786,7 @@ func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) (c
 
 		if fn != nil {
 			var err error
-			ops, err = fn(clientv3.NoLease)
+			ops, _, err = fn(clientv3.NoLease)
 			if err != nil {
 				return clientv3.NoLease, err
 			}
@@ -911,6 +994,12 @@ func (ec *etcdClient) TryLock(key string, leaseSecond int) (rtn *Lock, rtnErr er
 			panic(err.Error())
 		}
 
+		_, err = ec.impl.Put(context.TODO(), ec.formatLeaseKey(s2.Lease()), key, clientv3.WithLease(s2.Lease()))
+
+		if err != nil {
+			logger.Warning("**** Lease error at Lock session : %v", err)
+		}
+
 		return &Lock{s: s2, m: m2}, nil
 	} else {
 		ec.Get().Delete(context.TODO(), myKey)
@@ -954,6 +1043,13 @@ func (ec *etcdClient) Lock(key string, leaseSecond int) (rtn *Lock, rtnErr error
 		rtn = nil
 		logger.Warning("Lock error : %v", err)
 		rtnErr = LockError.New(fmt.Sprintf("Lock error : %v", err))
+	} else {
+		leaseKey := ec.formatLeaseKey(s2.Lease())
+		_, err = s2.Client().Put(context.TODO(), leaseKey, key, clientv3.WithLease(s2.Lease()))
+
+		if err != nil {
+			logger.Warning("**** Lease error at Lock session : %v", err)
+		}
 	}
 
 	return
@@ -1027,10 +1123,15 @@ func (ec *etcdClient) PutInt(key string, i int64, writeTimeoutSec int) error {
 	return ec.PutText(key, strconv.FormatInt(i, 10), writeTimeoutSec)
 }
 
-const LOCK_PREFIX = "/boot4go-lock/_lock/_%s"
+const LOCK_PREFIX = "/etcd4go-lock/#lock/_%s"
+const LEASE_PREFIX = "/etcd4go-lease/#lease/_%s"
 
 func (ec *etcdClient) formatLockKey(key string) string {
-	return fmt.Sprintf(LOCK_PREFIX, key+"_")
+	return fmt.Sprintf(LOCK_PREFIX, key+"#")
+}
+
+func (ec *etcdClient) formatLeaseKey(id clientv3.LeaseID) string {
+	return fmt.Sprintf(LEASE_PREFIX, strconv.FormatInt(int64(id), 16)+"#")
 }
 
 func (ec *etcdClient) Incr(key string, count int64, leaseSecond int) (int64, error) {
