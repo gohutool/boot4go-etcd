@@ -555,7 +555,7 @@ func TestPutWithLease(t *testing.T) {
 
 	EtcdClient.PutLeasedValue(key, "hello world", 20, 0)
 
-	EtcdClient.PutValuePlus(key, "hello world", 20, 0)
+	EtcdClient.PutValuePlus(key, "hello world", 60, 0)
 
 	logger.Info("Test Over")
 	time.Sleep(2 * time.Second)
