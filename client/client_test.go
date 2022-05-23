@@ -560,3 +560,25 @@ func TestPutWithLease(t *testing.T) {
 	logger.Info("Test Over")
 	time.Sleep(2 * time.Second)
 }
+
+func TestKeepAlive(t *testing.T) {
+
+	key := "foo"
+
+	err := EtcdClient.Init([]string{"192.168.56.101:32379"}, "", "", 30)
+
+	if err == nil {
+		logger.Info("Etcd is connect")
+	} else {
+		panic("Etcd can not connect")
+	}
+
+	EtcdClient.PutKeepAliveValue(key, "hello world", 30, 0, func(lease clientv3.LeaseID) error {
+		logger.Info(lease)
+		return nil
+	})
+
+	time.Sleep(300 * time.Second)
+	logger.Info("Test Over")
+	time.Sleep(2 * time.Second)
+}

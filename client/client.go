@@ -610,6 +610,8 @@ func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTim
 				}()
 
 				for {
+					breakNow := false
+
 					select {
 					case <-keepRespChan:
 						{
@@ -617,11 +619,30 @@ func (ec *etcdClient) PutKeepAliveValue(key string, data any, leaseSec, writeTim
 								logger.Debug("租约(%v)已经失效, 退出自动续约", lease.ID)
 								return
 							} else { //每秒会续租一次，所以就会受到一次应答
-								//logger.Debug("收到自动续租(%v)应答", lease.ID)
+								rs, err := ec.impl.TimeToLive(context.TODO(), lease.ID)
+
+								if err != nil {
+									logger.Debug("收到自动续租(%v)应答, Lease已经失效", lease.ID)
+									breakNow = true
+									break
+								}
+
+								if rs.TTL <= 0 {
+									logger.Debug("收到自动续租(%v)应答, Lease已经失效", lease.ID)
+									breakNow = true
+									break
+								}
+
+								logger.Debug("收到自动续租(%v)应答, TTL(%v)", lease.ID, lease.TTL)
 							}
 						}
 					}
-					time.Sleep(1 * time.Nanosecond)
+
+					if breakNow {
+						break
+					}
+
+					time.Sleep(100 * time.Millisecond)
 				}
 			}()
 		} else {
