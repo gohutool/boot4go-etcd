@@ -10,6 +10,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"golang.org/x/net/context"
+	"os"
 	"reflect"
 	"strconv"
 	"time"
@@ -68,7 +69,9 @@ func (s sortMode) New(target SortTarget, order SortOrder) sortMode {
 }
 
 type etcdClient struct {
-	impl *clientv3.Client
+	impl      *clientv3.Client
+	localIP   string
+	processID int
 }
 
 func (ec etcdClient) Get() *clientv3.Client {
@@ -81,6 +84,10 @@ func (ec *etcdClient) NewClient() etcdClient {
 	return etcdClient{}
 }
 
+func (ec *etcdClient) ClientID() string {
+	return fmt.Sprintf("%v@%v", ec.localIP, ec.processID)
+}
+
 func (ec *etcdClient) Init(endPoints []string, username, password string, dialTimeoutSec int) error {
 
 	var dialTimeout time.Duration
@@ -90,6 +97,9 @@ func (ec *etcdClient) Init(endPoints []string, username, password string, dialTi
 	} else {
 		dialTimeout = time.Duration(dialTimeoutSec) * time.Second
 	}
+
+	ec.localIP = *util4go.GuessIP(endPoints[0])
+	ec.processID = os.Getpid()
 
 	c, err := clientv3.New(clientv3.Config{
 		Endpoints:   endPoints,
@@ -402,8 +412,8 @@ func (ec *etcdClient) PutLeasedValueOp(key string, data any, leaseId clientv3.Le
 
 		return []clientv3.Op{
 			ec.PutValueOp(key, data, ops...),
-			ec.PutValueOp(ec.formatLeaseKey(leaseId, key), "", clientv3.WithLease(leaseId)),
-			ec.PutValueOp(ec.formatLeaseObjectKey(leaseId, key), "", clientv3.WithLease(leaseId)),
+			//ec.PutValueOp(ec.formatLeaseKey(leaseId, key), "", clientv3.WithLease(leaseId)),
+			//ec.PutValueOp(ec.formatLeaseObjectKey(leaseId, key), "", clientv3.WithLease(leaseId)),
 		}
 	}
 }
@@ -434,8 +444,8 @@ func (ec *etcdClient) PutLeasedValue(key string, data any, leaseId clientv3.Leas
 			return v, err
 		}
 
-		_, err = ec.impl.Put(ctx, ec.formatLeaseKey(leaseId, key), "", clientv3.WithLease(leaseId))
-		_, err = ec.impl.Put(ctx, ec.formatLeaseObjectKey(leaseId, key), "", clientv3.WithLease(leaseId))
+		//_, err = ec.impl.Put(ctx, ec.formatLeaseKey(leaseId, key), "", clientv3.WithLease(leaseId))
+		//_, err = ec.impl.Put(ctx, ec.formatLeaseObjectKey(leaseId, key), "", clientv3.WithLease(leaseId))
 
 		return v, err
 	} else {
@@ -529,17 +539,17 @@ func (ec *etcdClient) PutValuePlus(key string, data any, leaseSec, writeTimeoutS
 				return v, clientv3.NoLease, err1
 			}
 
-			_, err1 = ec.impl.Put(ctx, ec.formatLeaseKey(lease.ID, key), "", clientv3.WithLease(lease.ID))
-
-			if err1 != nil {
-				return v, clientv3.NoLease, err1
-			}
-
-			_, err1 = ec.impl.Put(ctx, ec.formatLeaseObjectKey(lease.ID, key), "", clientv3.WithLease(lease.ID))
-
-			if err1 != nil {
-				return v, clientv3.NoLease, err1
-			}
+			//_, err1 = ec.impl.Put(ctx, ec.formatLeaseKey(lease.ID, key), "", clientv3.WithLease(lease.ID))
+			//
+			//if err1 != nil {
+			//	return v, clientv3.NoLease, err1
+			//}
+			//
+			//_, err1 = ec.impl.Put(ctx, ec.formatLeaseObjectKey(lease.ID, key), "", clientv3.WithLease(lease.ID))
+			//
+			//if err1 != nil {
+			//	return v, clientv3.NoLease, err1
+			//}
 
 			return v, lease.ID, err1
 
@@ -711,17 +721,17 @@ func (ec *etcdClient) BulkOpsPlus(txnBuild TxnBuild, leaseTtl, writeTimeoutSec i
 	if leaseTtl > 0 {
 		if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
 
-			var leaseDesc string
+			//var leaseDesc string
 
 			if txnBuild != nil {
-				txn, leaseDesc, err = txnBuild(txn, lease.ID)
+				txn, _, err = txnBuild(txn, lease.ID)
 				if err != nil {
 					return clientv3.NoLease, err
 				}
-				txn.Then(
-					ec.PutValueOp(ec.formatLeaseKey(lease.ID, leaseDesc), "", clientv3.WithLease(lease.ID)),
-					ec.PutValueOp(ec.formatLeaseObjectKey(lease.ID, leaseDesc), "", clientv3.WithLease(lease.ID)),
-				)
+				//txn.Then(
+				//	ec.PutValueOp(ec.formatLeaseKey(lease.ID, leaseDesc), "", clientv3.WithLease(lease.ID)),
+				//	ec.PutValueOp(ec.formatLeaseObjectKey(lease.ID, leaseDesc), "", clientv3.WithLease(lease.ID)),
+				//)
 			}
 
 			rsp, err := txn.Commit()
@@ -781,10 +791,10 @@ func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) (c
 		if lease, err := ec.impl.Grant(ctx, int64(leaseTtl)); err == nil {
 			var ops []clientv3.Op
 
-			var leaseDesc string
+			//var leaseDesc string
 
 			if fn != nil {
-				ops, leaseDesc, err = fn(lease.ID)
+				ops, _, err = fn(lease.ID)
 				if err != nil {
 					return clientv3.NoLease, err
 				}
@@ -792,11 +802,11 @@ func (ec *etcdClient) BulkOps(fn LeaseOpBuild, leaseTtl, writeTimeoutSec int) (c
 				ops = []clientv3.Op{}
 			}
 
-			if len(ops) > 0 && !util4go.IsEmpty(leaseDesc) {
-				ops = append(ops,
-					ec.PutValueOp(ec.formatLeaseKey(lease.ID, leaseDesc), "", clientv3.WithLease(lease.ID)),
-					ec.PutValueOp(ec.formatLeaseObjectKey(lease.ID, leaseDesc), "", clientv3.WithLease(lease.ID)))
-			}
+			//if len(ops) > 0 && !util4go.IsEmpty(leaseDesc) {
+			//	ops = append(ops,
+			//		ec.PutValueOp(ec.formatLeaseKey(lease.ID, leaseDesc), "", clientv3.WithLease(lease.ID)),
+			//		ec.PutValueOp(ec.formatLeaseObjectKey(lease.ID, leaseDesc), "", clientv3.WithLease(lease.ID)))
+			//}
 
 			//ec.PutValueOp(ec.formatLeaseKey(leaseId), key, clientv3.WithLease(leaseId)),
 
@@ -908,6 +918,8 @@ func (ec *etcdClient) WatchKeyWithPrefix(prefix string, listener WatchChannelEve
 type Lock struct {
 	s *concurrency.Session
 	m *concurrency.Mutex
+	//key string
+	//ec  *etcdClient
 }
 
 const DEFAULT_LOCK_TTL = 60
@@ -972,6 +984,7 @@ func (ec *etcdClient) LockAndDo(key string, leaseSecond int, do func() (any, err
 // it will release all resources automatically
 // If key is locker by other, it wil return lock object with nil without blocking
 func (ec *etcdClient) TryLock(key string, leaseSecond int) (rtn *Lock, rtnErr error) {
+	var oldKey = key
 	key = ec.formatLockKey(key)
 	if leaseSecond <= 0 {
 		leaseSecond = DEFAULT_LOCK_TTL
@@ -982,6 +995,8 @@ func (ec *etcdClient) TryLock(key string, leaseSecond int) (rtn *Lock, rtnErr er
 	if err != nil {
 		return nil, LockError.New(fmt.Sprintf("Lock error : %v", err))
 	}
+
+	ec.recordLockRequestInfo(oldKey, s2.Lease())
 
 	defer func() {
 		if err := recover(); err != nil {
@@ -1027,17 +1042,19 @@ func (ec *etcdClient) TryLock(key string, leaseSecond int) (rtn *Lock, rtnErr er
 			panic(err.Error())
 		}
 
-		_, err = ec.impl.Put(context.TODO(), ec.formatLeaseKey(s2.Lease(), key), "", clientv3.WithLease(s2.Lease()))
+		//_, err = ec.impl.Put(context.TODO(), ec.formatLeaseKey(s2.Lease(), key), "", clientv3.WithLease(s2.Lease()))
+		//
+		//if err != nil {
+		//	logger.Warning("**** Lease error at Lock session : %v", err)
+		//}
 
-		if err != nil {
-			logger.Warning("**** Lease error at Lock session : %v", err)
-		}
+		//_, err = ec.impl.Put(context.TODO(), ec.formatLeaseObjectKey(s2.Lease(), key), "", clientv3.WithLease(s2.Lease()))
+		//
+		//if err != nil {
+		//	logger.Warning("**** Lease error at Lock session : %v", err)
+		//}
 
-		_, err = ec.impl.Put(context.TODO(), ec.formatLeaseObjectKey(s2.Lease(), key), "", clientv3.WithLease(s2.Lease()))
-
-		if err != nil {
-			logger.Warning("**** Lease error at Lock session : %v", err)
-		}
+		ec.recordLockInfo(oldKey, s2.Lease())
 
 		return &Lock{s: s2, m: m2}, nil
 	} else {
@@ -1053,6 +1070,7 @@ func (ec *etcdClient) TryLock(key string, leaseSecond int) (rtn *Lock, rtnErr er
 // it will release all resources automatically
 // If key is locker by other, current goroutine will be blocked
 func (ec *etcdClient) Lock(key string, leaseSecond int) (rtn *Lock, rtnErr error) {
+	var oldKey = key
 	key = ec.formatLockKey(key)
 	if leaseSecond <= 0 {
 		leaseSecond = DEFAULT_LOCK_TTL
@@ -1064,6 +1082,8 @@ func (ec *etcdClient) Lock(key string, leaseSecond int) (rtn *Lock, rtnErr error
 		return nil, LockError.New(fmt.Sprintf("Lock error : %v", err))
 	}
 
+	ec.recordLockRequestInfo(oldKey, s2.Lease())
+
 	defer func() {
 		if err := recover(); err != nil {
 			rtn = nil
@@ -1074,7 +1094,6 @@ func (ec *etcdClient) Lock(key string, leaseSecond int) (rtn *Lock, rtnErr error
 	}()
 
 	m2 := concurrency.NewMutex(s2, key)
-
 	rtn = &Lock{s: s2, m: m2}
 	rtnErr = nil
 
@@ -1083,19 +1102,22 @@ func (ec *etcdClient) Lock(key string, leaseSecond int) (rtn *Lock, rtnErr error
 		logger.Warning("Lock error : %v", err)
 		rtnErr = LockError.New(fmt.Sprintf("Lock error : %v", err))
 	} else {
-		leaseKey := ec.formatLeaseKey(s2.Lease(), key)
-		_, err = s2.Client().Put(context.TODO(), leaseKey, "", clientv3.WithLease(s2.Lease()))
 
-		if err != nil {
-			logger.Warning("**** Lease error at Lock session : %v", err)
-		}
+		ec.recordLockInfo(oldKey, s2.Lease())
 
-		leaseObjectKey := ec.formatLeaseObjectKey(s2.Lease(), key)
-		_, err = s2.Client().Put(context.TODO(), leaseObjectKey, "", clientv3.WithLease(s2.Lease()))
+		//leaseKey := ec.formatLeaseKey(s2.Lease(), key)
+		//_, err = s2.Client().Put(context.TODO(), leaseKey, "", clientv3.WithLease(s2.Lease()))
+		//
+		//if err != nil {
+		//	logger.Warning("**** Lease error at Lock session : %v", err)
+		//}
 
-		if err != nil {
-			logger.Warning("**** Lease error at Lock session : %v", err)
-		}
+		//leaseObjectKey := ec.formatLeaseObjectKey(s2.Lease(), key)
+		//_, err = s2.Client().Put(context.TODO(), leaseObjectKey, "", clientv3.WithLease(s2.Lease()))
+		//
+		//if err != nil {
+		//	logger.Warning("**** Lease error at Lock session : %v", err)
+		//}
 	}
 
 	return
@@ -1112,6 +1134,9 @@ func (l *Lock) UnLock() error {
 		if l.s != nil {
 			l.s.Close()
 		}
+
+		//l.ec.removeLockRequestInfo(l.key, l.Session().Lease())
+		//l.ec.removeLockInfo(l.key)
 	}()
 
 	if err := l.m.Unlock(context.TODO()); err != nil {
@@ -1170,20 +1195,59 @@ func (ec *etcdClient) PutInt(key string, i int64, writeTimeoutSec int) error {
 }
 
 const LOCK_PREFIX = "/etcd4go-lock/#lock/_%s"
-const LEASE_PREFIX = "/etcd4go-lease/#lease/_%s#/_%s"
-const LEASE_OBJECT_PREFIX = "/etcd4go-lease/#object/_%s#/_%s"
+const LOCK_INFO_PREFIX = "/etcd4go-lock/#info/_%s"
+const LOCK_REQUEST_INFO_PREFIX = "/etcd4go-lock/#request/_%s/%v"
+
+//const LEASE_PREFIX = "/etcd4go-lease/#lease/_%s#/_%s"
+//const LEASE_OBJECT_PREFIX = "/etcd4go-lease/#object/_%s#/_%s"
 
 func (ec *etcdClient) formatLockKey(key string) string {
 	return fmt.Sprintf(LOCK_PREFIX, key+"#")
 }
 
-func (ec *etcdClient) formatLeaseKey(id clientv3.LeaseID, leaseObject string) string {
-	return fmt.Sprintf(LEASE_PREFIX, strconv.FormatInt(int64(id), 16), leaseObject)
+func (ec *etcdClient) formatLockInfoKey(key string) string {
+	return fmt.Sprintf(LOCK_INFO_PREFIX, key)
 }
 
-func (ec *etcdClient) formatLeaseObjectKey(id clientv3.LeaseID, leaseObject string) string {
-	return fmt.Sprintf(LEASE_OBJECT_PREFIX, leaseObject, strconv.FormatInt(int64(id), 16))
+func (ec *etcdClient) formatLockRequestInfoKey(key string, leaseId clientv3.LeaseID) string {
+	return fmt.Sprintf(LOCK_REQUEST_INFO_PREFIX, key, leaseId)
 }
+
+func (ec *etcdClient) recordLockInfo(key string, leaseid clientv3.LeaseID) {
+	info := make(map[string]any)
+	info["client"] = ec.ClientID()
+	info["time"] = time.Now().Format("2006/01/02 15:04:05")
+	info["leaseid"] = strconv.FormatInt(int64(leaseid), 10)
+	info["lock_key"] = key
+	str, _ := json.Marshal(info)
+	ec.Get().Put(context.TODO(), ec.formatLockInfoKey(key), string(str), clientv3.WithLease(leaseid))
+}
+
+func (ec *etcdClient) recordLockRequestInfo(key string, leaseid clientv3.LeaseID) {
+	info := make(map[string]any)
+	info["client"] = ec.ClientID()
+	info["time"] = time.Now().Format("2006/01/02 15:04:05")
+	info["leaseid"] = strconv.FormatInt(int64(leaseid), 10)
+	info["lock_key"] = key
+	str, _ := json.Marshal(info)
+	ec.Get().Put(context.TODO(), ec.formatLockRequestInfoKey(key, leaseid), string(str), clientv3.WithLease(leaseid))
+}
+
+//func (ec *etcdClient) removeLockInfo(key string) {
+//	ec.Get().Delete(context.TODO(), ec.formatLockInfoKey(key))
+//}
+
+//func (ec *etcdClient) removeLockRequestInfo(key string, leaseid clientv3.LeaseID) {
+//	ec.Get().Delete(context.TODO(), ec.formatLockRequestInfoKey(key, leaseid))
+//}
+
+//func (ec *etcdClient) formatLeaseKey(id clientv3.LeaseID, leaseObject string) string {
+//	return fmt.Sprintf(LEASE_PREFIX, strconv.FormatInt(int64(id), 16), leaseObject)
+//}
+//
+//func (ec *etcdClient) formatLeaseObjectKey(id clientv3.LeaseID, leaseObject string) string {
+//	return fmt.Sprintf(LEASE_OBJECT_PREFIX, leaseObject, strconv.FormatInt(int64(id), 16))
+//}
 
 func (ec *etcdClient) Incr(key string, count int64, leaseSecond int) (int64, error) {
 	rtn, err := ec.LockAndDo(key, leaseSecond, func() (any, error) {

@@ -180,6 +180,51 @@ func TestLockTwoTwo(t *testing.T) {
 	wg.Wait()
 }
 
+func TestLockTwoWithClient2(t *testing.T) {
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
+	err := EtcdClient.Init([]string{"192.168.56.101:32379"}, "", "", 30)
+
+	if err == nil {
+		logger.Info("Etcd is connect")
+	} else {
+		panic("Etcd can not connect")
+	}
+
+	defer EtcdClient.Close()
+
+	go func() {
+		logger.Info("Come int goroutine 1")
+		logger.Info("Prepare lock for goroutine 1")
+		defer wg.Done()
+
+		lock, err := EtcdClient.Lock("mylock", 300)
+
+		if err != nil {
+			panic(err)
+		}
+		logger.Info("session1 上锁成功。 time：%d", time.Now().Unix())
+
+		defer func() {
+			lock.UnLock()
+			logger.Info("session1 解锁。 time：%d", time.Now().Unix())
+		}()
+
+		time.Sleep(100 * time.Second)
+
+		//fmt.Printf("session1 已经关闭。 time：%d \n", time.Now().Unix())
+
+	}()
+
+	wg.Wait()
+
+	logger.Info("Test Over")
+
+	time.Sleep(2 * time.Second)
+
+}
+
 func TestLockTwoWithClient(t *testing.T) {
 
 	wg := &sync.WaitGroup{}
@@ -197,7 +242,7 @@ func TestLockTwoWithClient(t *testing.T) {
 	go func() {
 		logger.Info("Come int goroutine 1")
 		logger.Info("Prepare lock for goroutine 1")
-		lock, err := EtcdClient.Lock("mylock", 0)
+		lock, err := EtcdClient.Lock("mylock", 300)
 
 		if err != nil {
 			logger.Critical(err)
@@ -210,7 +255,7 @@ func TestLockTwoWithClient(t *testing.T) {
 			logger.Info("session1 解锁。 time：%d", time.Now().Unix())
 		}()
 
-		time.Sleep(10 * time.Second)
+		time.Sleep(30 * time.Second)
 
 		//fmt.Printf("session1 已经关闭。 time：%d \n", time.Now().Unix())
 
@@ -220,7 +265,7 @@ func TestLockTwoWithClient(t *testing.T) {
 		logger.Info("Come int goroutine 2")
 		time.Sleep(1 * time.Second)
 		logger.Info("Prepare lock for goroutine 2")
-		lock2, err := EtcdClient.Lock("mylock", 0)
+		lock2, err := EtcdClient.Lock("mylock", 300)
 		logger.Info("session2 上锁成功。 time：%d", time.Now().Unix())
 
 		if err != nil {
@@ -232,14 +277,14 @@ func TestLockTwoWithClient(t *testing.T) {
 			logger.Info("session1 解锁。 time：%d", time.Now().Unix())
 		}()
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(30 * time.Second)
 	}()
 
 	go func() {
 		logger.Info("Come int goroutine 3")
 		time.Sleep(1 * time.Second)
 		logger.Info("Prepare lock for goroutine 3")
-		lock3, err := EtcdClient.Lock("mylock", 0)
+		lock3, err := EtcdClient.Lock("mylock", 300)
 		logger.Info("session3 上锁成功。 time：%d", time.Now().Unix())
 
 		if err != nil {
@@ -251,14 +296,14 @@ func TestLockTwoWithClient(t *testing.T) {
 			logger.Info("session3 解锁。 time：%d", time.Now().Unix())
 		}()
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(30 * time.Second)
 	}()
 
 	go func() {
 		logger.Info("Come int goroutine 4")
 		time.Sleep(1 * time.Second)
 		logger.Info("Prepare lock for goroutine 4")
-		lock2, err := EtcdClient.Lock("mylock2", 0)
+		lock2, err := EtcdClient.Lock("mylock2", 300)
 		logger.Info("session4 上锁成功。 time：%d", time.Now().Unix())
 
 		if err != nil {
@@ -270,7 +315,7 @@ func TestLockTwoWithClient(t *testing.T) {
 			logger.Info("session4 解锁。 time：%d", time.Now().Unix())
 		}()
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(30 * time.Second)
 	}()
 
 	wg.Wait()
@@ -541,9 +586,11 @@ func TestIncrConcurrent(t *testing.T) {
 
 func TestPutWithLease(t *testing.T) {
 
-	key := "/test/test_lease/sample"
+	key := "foo"
 
 	err := EtcdClient.Init([]string{"192.168.56.101:32379"}, "", "", 30)
+
+	logger.Info(EtcdClient.ClientID())
 
 	if err == nil {
 		logger.Info("Etcd is connect")
@@ -553,7 +600,7 @@ func TestPutWithLease(t *testing.T) {
 
 	EtcdClient.PutValue(key, "hello world", 0)
 
-	EtcdClient.PutLeasedValue(key, "hello world", 20, 0)
+	//EtcdClient.PutLeasedValue(key, "hello world", 20, 0)
 
 	EtcdClient.PutValuePlus(key, "hello world", 60, 0)
 
